@@ -1,0 +1,28 @@
+@import "tailwindcss";
+
+/* Custom form element styles */
+input[type="text"],
+input[type="email"],
+input[type="number"],
+input[type="date"],
+textarea {
+  font-family: inherit;
+}
+
+input[type="number"]::-webkit-inner-spin-button,
+input[type="number"]::-webkit-outer-spin-button {
+  opacity: 1;
+}
+
+/* Invoice preview print styles */
+@media print {
+  body {
+    background: white;
+  }
+
+  #invoice-preview {
+    box-shadow: none;
+    padding: 0;
+    max-width: none;
+  }
+}
