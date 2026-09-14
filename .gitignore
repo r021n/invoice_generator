@@ -11,17 +11,33 @@ node_modules
 dist
 dist-ssr
 *.local
+# Environment and secrets
 .env
 .env.*
 !.env.example
+*.pem
+*.key
+*.cert
+
+# Local SQLite databases & backups
+*.sqlite
+*.sqlite3
+*.db
+
+# Test coverage & cache
+coverage/
+.vitest/
+*.tsbuildinfo
 
 # Editor directories and files
 .vscode/*
 !.vscode/extensions.json
 .idea
 .DS_Store
+Thumbs.db
 *.suo
 *.ntvs*
 *.njsproj
 *.sln
 *.sw?
+

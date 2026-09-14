@@ -5,7 +5,6 @@
     CURRENCIES,
     calculateItemTotal,
     formatCurrency,
-    DEFAULT_COLUMN_IDS,
   } from './invoice';
 
   let { invoice = $bindable() }: { invoice: InvoiceData } = $props();
@@ -32,21 +31,6 @@
     if (invoice.items.length > 1) {
       invoice.items = invoice.items.filter((item) => item.id !== id);
     }
-  }
-
-  function updateItemValue(itemId: string, colId: string, value: string | number) {
-    invoice.items = invoice.items.map((item) => {
-      if (item.id === itemId) {
-        return {
-          ...item,
-          values: {
-            ...item.values,
-            [colId]: value,
-          },
-        };
-      }
-      return item;
-    });
   }
 
   function updateColumnLabel(colId: string, label: string) {
@@ -129,7 +113,7 @@
           bind:value={invoice.currency}
           class="w-full rounded border border-zinc-300 bg-white px-3 py-2 text-sm text-zinc-900 transition focus:border-zinc-900 focus:outline-none focus:ring-1 focus:ring-zinc-900"
         >
-          {#each CURRENCIES as currency}
+          {#each CURRENCIES as currency (currency.code)}
             <option value={currency.code}>{currency.symbol} - {currency.name} ({currency.code})</option>
           {/each}
         </select>
