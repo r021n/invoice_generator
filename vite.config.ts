@@ -4,6 +4,7 @@ import { defineConfig } from "vite";
 
 // https://vite.dev/config/
 export default defineConfig({
+  base: '/invoice_generator/',
   plugins: [tailwindcss(), svelte()],
   server: {
     host: true,
