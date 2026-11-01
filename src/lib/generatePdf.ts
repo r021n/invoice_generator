@@ -1,21 +1,7 @@
 import { jsPDF } from 'jspdf';
 import type { InvoiceData, InvoiceColumn, InvoiceItem } from './invoice';
-import {
-  calculateSubtotal,
-  calculateItemTotal,
-  CURRENCIES,
-  formatCurrency,
-} from './invoice';
-
-function formatDate(dateStr: string): string {
-  if (!dateStr) return '';
-  const date = new Date(dateStr + 'T00:00:00');
-  return date.toLocaleDateString('id-ID', {
-    year: 'numeric',
-    month: 'long',
-    day: 'numeric',
-  });
-}
+import { calculateSubtotal, calculateItemTotal } from './invoice';
+import { formatCurrencyAmount, formatDateIndonesian } from './formatters';
 
 export function generatePdf(invoice: InvoiceData): void {
   const doc = new jsPDF({
@@ -30,11 +16,8 @@ export function generatePdf(invoice: InvoiceData): void {
   const contentWidth = pageWidth - margin * 2;
   let y = margin;
 
-  const currency =
-    CURRENCIES.find((c) => c.code === invoice.currency) ?? CURRENCIES[0];
-
   function fmt(amount: number): string {
-    return formatCurrency(amount, currency);
+    return formatCurrencyAmount(amount, invoice.currency);
   }
 
   function formatCellValue(item: InvoiceItem, col: InvoiceColumn): string {
@@ -55,7 +38,7 @@ export function generatePdf(invoice: InvoiceData): void {
   doc.setFontSize(22);
   doc.setFont('helvetica', 'bold');
   doc.setTextColor(20, 20, 20);
-  doc.text('INVOICE', margin, y + 6);
+  doc.text('FAKTUR', margin, y + 6);
   y += 9;
 
   doc.setFontSize(9);
@@ -66,8 +49,8 @@ export function generatePdf(invoice: InvoiceData): void {
   // Date info (right aligned)
   doc.setTextColor(50, 50, 50);
   doc.setFontSize(9);
-  const dateText = `Tanggal: ${formatDate(invoice.date)}`;
-  const dueText = `Jatuh Tempo: ${formatDate(invoice.dueDate)}`;
+  const dateText = `Tanggal: ${formatDateIndonesian(invoice.date)}`;
+  const dueText = `Jatuh Tempo: ${formatDateIndonesian(invoice.dueDate)}`;
   doc.text(dateText, pageWidth - margin, margin + 4, { align: 'right' });
   doc.text(dueText, pageWidth - margin, margin + 9, { align: 'right' });
 
@@ -85,10 +68,10 @@ export function generatePdf(invoice: InvoiceData): void {
   doc.setFontSize(8);
   doc.setFont('helvetica', 'bold');
   doc.setTextColor(120, 120, 120);
-  doc.text('DARI (FROM)', margin, y);
+  doc.text('DARI', margin, y);
 
   // To
-  doc.text('DITUJUKAN KEPADA (BILL TO)', margin + halfColWidth + 10, y);
+  doc.text('DITUJUKAN KEPADA', margin + halfColWidth + 10, y);
   y += 5;
 
   let fromY = y;
@@ -278,7 +261,7 @@ export function generatePdf(invoice: InvoiceData): void {
     doc.setFontSize(8);
     doc.setFont('helvetica', 'bold');
     doc.setTextColor(120, 120, 120);
-    doc.text('CATATAN (NOTES)', margin, y);
+    doc.text('CATATAN & KETENTUAN', margin, y);
     y += 4;
 
     doc.setFontSize(8.5);

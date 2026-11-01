@@ -6,23 +6,42 @@
   import { createEmptyInvoice } from './lib/invoice';
   import { generatePdf } from './lib/generatePdf';
   import { createInvoice, updateInvoice, listInvoices, getDatabase } from './lib/db';
-  import type { InvoiceData } from './lib/invoice';
+  import type { InvoiceData, InvoiceItem } from './lib/invoice';
 
   let invoice = $state<InvoiceData>(createEmptyInvoice());
   let currentInvoiceId = $state<string | null>(null);
   let activeTab = $state<'edit' | 'preview'>('edit');
   let isHistoryOpen = $state(false);
-  let isSaving = $state(false);
   let savedCount = $state(0);
-  let toast = $state<{ text: string; type: 'success' | 'error' | 'info' } | null>(null);
+
+  // Status Auto-save
+  type SaveStatus = 'saved' | 'saving' | 'unsaved';
+  let saveStatus = $state<SaveStatus>('saved');
+  let autoSaveTimer: ReturnType<typeof setTimeout> | null = null;
+  let isInitialLoad = $state(true);
+  let lastSavedSnapshot = $state<string>('');
+
+  // Undo Item Terhapus
+  let lastDeleted = $state<{ item: InvoiceItem; index: number } | null>(null);
+
+  // Toast Notifikasi
+  let toast = $state<{
+    text: string;
+    type: 'success' | 'error' | 'info';
+    action?: { label: string; run: () => void };
+  } | null>(null);
   let toastTimer: ReturnType<typeof setTimeout> | null = null;
 
-  function showToast(text: string, type: 'success' | 'error' | 'info' = 'success') {
+  function showToast(
+    text: string,
+    type: 'success' | 'error' | 'info' = 'success',
+    action?: { label: string; run: () => void }
+  ) {
     if (toastTimer) clearTimeout(toastTimer);
-    toast = { text, type };
+    toast = { text, type, action };
     toastTimer = setTimeout(() => {
       toast = null;
-    }, 4000);
+    }, action ? 6000 : 3500);
   }
 
   async function refreshSavedCount() {
@@ -30,239 +49,322 @@
       const items = await listInvoices();
       savedCount = items.length;
     } catch (err) {
-      console.error('Failed to get invoices count:', err);
+      console.error('Gagal mengambil jumlah faktur:', err);
     }
   }
 
   onMount(() => {
     getDatabase()
       .then(() => refreshSavedCount())
-      .catch((err) => console.error('DB init failed:', err));
+      .catch((err) => console.error('Inisialisasi database gagal:', err));
+
+    lastSavedSnapshot = JSON.stringify(invoice);
+    setTimeout(() => {
+      isInitialLoad = false;
+    }, 300);
+
+    const handleBeforeUnload = (e: BeforeUnloadEvent) => {
+      if (saveStatus === 'unsaved' || saveStatus === 'saving') {
+        e.preventDefault();
+        e.returnValue = '';
+      }
+    };
+    window.addEventListener('beforeunload', handleBeforeUnload);
+
+    return () => {
+      window.removeEventListener('beforeunload', handleBeforeUnload);
+    };
   });
 
-  async function handleSave() {
-    isSaving = true;
+  async function performSave(): Promise<string | null> {
+    saveStatus = 'saving';
     try {
       if (currentInvoiceId) {
         await updateInvoice(currentInvoiceId, invoice);
-        showToast(`Invoice ${invoice.invoiceNumber} updated in SQLite database`, 'success');
       } else {
         const res = await createInvoice(invoice);
         currentInvoiceId = res.id;
-        showToast(`Invoice ${invoice.invoiceNumber} saved to SQLite database`, 'success');
       }
+      lastSavedSnapshot = JSON.stringify(invoice);
+      saveStatus = 'saved';
       await refreshSavedCount();
+      return currentInvoiceId;
     } catch (err) {
-      console.error(err);
-      showToast('Failed to save invoice to SQLite database', 'error');
-    } finally {
-      isSaving = false;
+      console.error('Auto-save gagal:', err);
+      saveStatus = 'unsaved';
+      return null;
     }
   }
 
-  async function handleSaveAsNew() {
-    isSaving = true;
-    try {
-      const copy: InvoiceData = JSON.parse(JSON.stringify(invoice));
-      // If saving as new, ensure unique invoice number if same
-      if (copy.invoiceNumber === invoice.invoiceNumber && currentInvoiceId) {
-        copy.invoiceNumber = `INV-${Date.now().toString(36).toUpperCase()}`;
-        invoice.invoiceNumber = copy.invoiceNumber;
-      }
-      const res = await createInvoice(copy);
-      currentInvoiceId = res.id;
-      showToast(`Saved as new invoice ${copy.invoiceNumber} in database`, 'success');
-      await refreshSavedCount();
-    } catch (err) {
-      console.error(err);
-      showToast('Failed to save as new invoice', 'error');
-    } finally {
-      isSaving = false;
-    }
+  function scheduleAutoSave() {
+    if (autoSaveTimer) clearTimeout(autoSaveTimer);
+    saveStatus = 'unsaved';
+    autoSaveTimer = setTimeout(() => {
+      performSave();
+    }, 1200);
   }
 
-  function handleNewInvoice() {
+  $effect(() => {
+    // Pantau perubahan pada invoice untuk auto-save reaktif
+    const current = JSON.stringify(invoice);
+    if (!isInitialLoad && current !== lastSavedSnapshot) {
+      scheduleAutoSave();
+    }
+  });
+
+  async function handleGeneratePdf() {
+    // Sinkronkan ke database terlebih dahulu sebelum PDF diekspor
+    if (autoSaveTimer) {
+      clearTimeout(autoSaveTimer);
+      autoSaveTimer = null;
+    }
+    if (saveStatus !== 'saved') {
+      await performSave();
+    }
+    generatePdf(invoice);
+    showToast('Faktur berhasil diunduh dan otomatis tersimpan', 'success');
+  }
+
+  async function handleNewInvoice() {
+    if (autoSaveTimer) {
+      clearTimeout(autoSaveTimer);
+      autoSaveTimer = null;
+    }
+    if (saveStatus === 'unsaved') {
+      await performSave();
+    }
     invoice = createEmptyInvoice();
     currentInvoiceId = null;
-    showToast('New blank invoice initialized', 'info');
+    lastSavedSnapshot = JSON.stringify(invoice);
+    saveStatus = 'saved';
+    showToast('Draf faktur baru siap diisi', 'info');
   }
 
   function handleSelectInvoice(selected: InvoiceData, id: string) {
+    if (autoSaveTimer) {
+      clearTimeout(autoSaveTimer);
+      autoSaveTimer = null;
+    }
     invoice = selected;
     currentInvoiceId = id;
-    showToast(`Loaded invoice ${selected.invoiceNumber}`, 'info');
+    lastSavedSnapshot = JSON.stringify(selected);
+    saveStatus = 'saved';
+    showToast(`Faktur ${selected.invoiceNumber} berhasil dibuka`, 'info');
   }
 
   function handleDuplicateInvoice(duplicated: InvoiceData) {
+    if (autoSaveTimer) {
+      clearTimeout(autoSaveTimer);
+      autoSaveTimer = null;
+    }
     invoice = duplicated;
     currentInvoiceId = null;
-    showToast(`Invoice cloned as new draft: ${duplicated.invoiceNumber}`, 'info');
+    lastSavedSnapshot = JSON.stringify(duplicated);
+    saveStatus = 'saved';
+    showToast(`Faktur disalin sebagai draf baru: ${duplicated.invoiceNumber}`, 'info');
+    performSave();
   }
 
-  function handleGeneratePdf() {
-    generatePdf(invoice);
+  async function handleSaveAsNew() {
+    if (autoSaveTimer) {
+      clearTimeout(autoSaveTimer);
+      autoSaveTimer = null;
+    }
+    saveStatus = 'saving';
+    try {
+      const copy: InvoiceData = JSON.parse(JSON.stringify(invoice));
+      copy.invoiceNumber = `INV-${Date.now().toString(36).toUpperCase()}`;
+      invoice.invoiceNumber = copy.invoiceNumber;
+      const res = await createInvoice(copy);
+      currentInvoiceId = res.id;
+      lastSavedSnapshot = JSON.stringify(invoice);
+      saveStatus = 'saved';
+      showToast(`Tersimpan sebagai salinan baru: ${copy.invoiceNumber}`, 'success');
+      await refreshSavedCount();
+    } catch (err) {
+      console.error(err);
+      saveStatus = 'unsaved';
+      showToast('Gagal membuat salinan faktur', 'error');
+    }
+  }
+
+  function handleItemRemoved(item: InvoiceItem, index: number) {
+    lastDeleted = { item, index };
+    showToast('Baris item dihapus', 'info', {
+      label: 'Urungkan (Undo)',
+      run: () => {
+        if (lastDeleted) {
+          const items = [...invoice.items];
+          items.splice(lastDeleted.index, 0, lastDeleted.item);
+          invoice.items = items;
+          lastDeleted = null;
+          showToast('Baris item berhasil dikembalikan', 'success');
+        }
+      },
+    });
   }
 </script>
 
 <div class="min-h-screen bg-zinc-50 flex flex-col">
-  <!-- Top Navigation / Header -->
+  <!-- Navigasi Atas / Header -->
   <header class="border-b border-zinc-200 bg-white sticky top-0 z-30 shadow-xs">
     <div class="mx-auto flex max-w-7xl items-center justify-between px-4 py-3 sm:px-6">
       <div class="flex items-center gap-3">
         <div>
           <div class="flex items-center gap-2">
-            <h1 class="text-xl font-bold tracking-tight text-zinc-900">Invoice Generator</h1>
-            <span class="rounded bg-zinc-100 px-1.5 py-0.5 text-[10px] font-bold text-zinc-700">
-              SQLite Active
-            </span>
+            <h1 class="text-xl font-bold tracking-tight text-zinc-900">Generator Faktur</h1>
           </div>
-          <p class="text-xs text-zinc-500">Create, save, and manage invoices with local SQLite</p>
+          <p class="text-xs text-zinc-500">Buat, simpan otomatis, dan unduh faktur dengan mudah</p>
         </div>
       </div>
 
-      <!-- Action Buttons -->
+      <!-- Tombol Aksi Utama -->
       <div class="flex items-center gap-2">
         <button
           type="button"
           onclick={handleNewInvoice}
-          class="inline-flex items-center gap-1.5 rounded-sm border border-zinc-300 bg-white px-3 py-2 text-xs font-semibold text-zinc-700 hover:bg-zinc-100 hover:text-zinc-900"
-          title="Create a new blank invoice"
+          class="inline-flex items-center gap-1.5 rounded border border-zinc-300 bg-white px-3 py-2 text-xs font-semibold text-zinc-700 hover:bg-zinc-100 hover:text-zinc-900 transition"
+          title="Buat draf faktur kosong baru"
         >
           <svg class="h-3.5 w-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
             <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4v16m8-8H4" />
           </svg>
-          <span class="hidden sm:inline">New Invoice</span>
+          <span class="hidden sm:inline">Faktur Baru</span>
         </button>
 
         <button
           type="button"
           onclick={() => (isHistoryOpen = true)}
-          class="relative inline-flex items-center gap-1.5 rounded-sm border border-zinc-300 bg-white px-3 py-2 text-xs font-semibold text-zinc-700 hover:bg-zinc-100 hover:text-zinc-900"
-          title="Open SQLite Invoice History"
+          class="relative inline-flex items-center gap-1.5 rounded border border-zinc-300 bg-white px-3 py-2 text-xs font-semibold text-zinc-700 hover:bg-zinc-100 hover:text-zinc-900 transition"
+          title="Buka daftar riwayat faktur tersimpan"
         >
           <svg class="h-3.5 w-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
             <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z" />
           </svg>
-          <span>History</span>
+          <span>Riwayat</span>
           {#if savedCount > 0}
-            <span class="ml-0.5 rounded-full bg-zinc-900 px-1.5 py-0.2 text-[10px] font-bold text-white">
+            <span class="ml-0.5 rounded-full bg-zinc-900 px-1.5 py-0.5 text-xs font-bold text-white">
               {savedCount}
             </span>
           {/if}
-        </button>
-
-        <!-- Save Button -->
-        <button
-          type="button"
-          onclick={handleSave}
-          disabled={isSaving}
-          class="inline-flex items-center gap-1.5 rounded-sm bg-emerald-600 px-3.5 py-2 text-xs font-semibold text-white hover:bg-emerald-700 disabled:opacity-50"
-          title={currentInvoiceId ? 'Update this invoice in SQLite' : 'Save as new invoice to SQLite'}
-        >
-          <svg class="h-3.5 w-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 7H5a2 2 0 00-2 2v9a2 2 0 002 2h14a2 2 0 002-2V9a2 2 0 00-2-2h-3m-1 4l-3 3m0 0l-3-3m3 3V4" />
-          </svg>
-          <span>{isSaving ? 'Saving...' : currentInvoiceId ? 'Update DB' : 'Save to DB'}</span>
         </button>
 
         {#if currentInvoiceId}
           <button
             type="button"
             onclick={handleSaveAsNew}
-            disabled={isSaving}
-            class="hidden md:inline-flex items-center gap-1 rounded-sm border border-emerald-300 bg-emerald-50 px-2.5 py-2 text-xs font-semibold text-emerald-800 hover:bg-emerald-100"
-            title="Save current changes as a new separate invoice"
+            class="hidden md:inline-flex items-center gap-1 rounded border border-zinc-300 bg-zinc-50 px-3 py-2 text-xs font-semibold text-zinc-700 hover:bg-zinc-100 transition"
+            title="Simpan perubahan sebagai salinan faktur baru"
           >
-            Save as Copy
+            Salin Jadi Baru
           </button>
         {/if}
 
+        <!-- Tombol Primer Ekspor PDF -->
         <button
           type="button"
           onclick={handleGeneratePdf}
-          class="inline-flex items-center gap-1.5 rounded-sm bg-black px-4 py-2 text-xs font-semibold text-white hover:bg-zinc-800 active:bg-zinc-900"
+          class="inline-flex items-center gap-1.5 rounded bg-zinc-900 px-4 py-2 text-xs font-semibold text-white hover:bg-zinc-800 active:bg-zinc-950 transition shadow-xs"
         >
           <svg class="h-3.5 w-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
             <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4" />
           </svg>
-          <span>Download PDF</span>
+          <span>Unduh PDF</span>
         </button>
       </div>
     </div>
 
-    <!-- Status Bar for Currently Open Invoice -->
-    <div class="border-t border-zinc-100 bg-zinc-50/75 px-4 py-1.5 text-xs sm:px-6 flex items-center justify-between">
+    <!-- Status Bar Dokumen Aktif & Indikator Auto-Save -->
+    <div class="border-t border-zinc-100 bg-zinc-50/80 px-4 py-1.5 text-xs sm:px-6 flex items-center justify-between">
       <div class="flex items-center gap-2">
-        <span class="text-zinc-500">Active Document:</span>
+        <span class="text-zinc-500">Dokumen Aktif:</span>
         <span class="font-mono font-semibold text-zinc-900">{invoice.invoiceNumber}</span>
-        {#if currentInvoiceId}
-          <span class="rounded bg-emerald-100 px-1.5 py-0.5 text-[10px] font-semibold text-emerald-800">
-            Saved in SQLite (ID: {currentInvoiceId.slice(0, 8)})
+
+        <!-- Indikator Auto-Save Humanis -->
+        {#if saveStatus === 'saving'}
+          <span class="inline-flex items-center gap-1 rounded bg-blue-50 px-2 py-0.5 text-xs font-medium text-blue-700">
+            <span class="h-1.5 w-1.5 rounded-full bg-blue-500 animate-pulse"></span>
+            Menyimpan...
+          </span>
+        {:else if saveStatus === 'saved'}
+          <span class="inline-flex items-center gap-1 rounded bg-emerald-50 px-2 py-0.5 text-xs font-medium text-emerald-700">
+            <span class="h-1.5 w-1.5 rounded-full bg-emerald-500"></span>
+            Tersimpan otomatis
           </span>
         {:else}
-          <span class="rounded bg-amber-100 px-1.5 py-0.5 text-[10px] font-semibold text-amber-800">
-            Unsaved Draft
+          <span class="inline-flex items-center gap-1 rounded bg-amber-50 px-2 py-0.5 text-xs font-medium text-amber-700">
+            <span class="h-1.5 w-1.5 rounded-full bg-amber-500"></span>
+            Ada perubahan belum tersimpan
           </span>
         {/if}
       </div>
 
+      <!-- Notifikasi Toast & Tombol Undo -->
       {#if toast}
         <div
-          class="flex items-center gap-1.5 text-xs font-medium {toast.type === 'success'
+          class="flex items-center gap-2 text-xs font-medium {toast.type === 'success'
             ? 'text-emerald-700'
             : toast.type === 'error'
               ? 'text-rose-700'
-              : 'text-zinc-700'}"
+              : 'text-zinc-800'}"
         >
-          <span class="h-1.5 w-1.5 rounded-full {toast.type === 'success' ? 'bg-emerald-500' : toast.type === 'error' ? 'bg-rose-500' : 'bg-blue-500'}"></span>
           <span>{toast.text}</span>
+          {#if toast.action}
+            <button
+              type="button"
+              onclick={toast.action.run}
+              class="font-bold underline decoration-1 underline-offset-2 hover:text-black transition"
+            >
+              {toast.action.label}
+            </button>
+          {/if}
         </div>
       {/if}
     </div>
   </header>
 
-  <!-- Mobile Tab Switcher -->
+  <!-- Pengalih Tab Tampilan Mobile -->
   <div class="border-b border-zinc-200 bg-white sm:hidden">
     <div class="flex">
       <button
         onclick={() => (activeTab = 'edit')}
-        class="flex-1 py-3 text-center text-sm font-medium {activeTab === 'edit'
+        class="flex-1 py-3 text-center text-sm font-semibold {activeTab === 'edit'
           ? 'border-b-2 border-black text-black'
           : 'text-zinc-500'}"
       >
-        Edit Form
+        Formulir Faktur
       </button>
       <button
         onclick={() => (activeTab = 'preview')}
-        class="flex-1 py-3 text-center text-sm font-medium {activeTab === 'preview'
+        class="flex-1 py-3 text-center text-sm font-semibold {activeTab === 'preview'
           ? 'border-b-2 border-black text-black'
           : 'text-zinc-500'}"
       >
-        Live Preview
+        Pratinjau Langsung
       </button>
     </div>
   </div>
 
-  <!-- Main Content -->
+  <!-- Konten Utama -->
   <main class="mx-auto max-w-7xl flex-1 px-4 py-6 sm:px-6 w-full">
     <div class="flex flex-col gap-8 lg:flex-row">
-      <!-- Form Panel -->
+      <!-- Panel Formulir Input -->
       <div class="w-full lg:w-1/2 {activeTab !== 'edit' ? 'hidden sm:block' : ''}">
         <div class="rounded-sm border border-zinc-200 bg-white p-6 shadow-xs">
-          <InvoiceForm bind:invoice />
+          <InvoiceForm bind:invoice onItemRemoved={handleItemRemoved} />
         </div>
       </div>
 
-      <!-- Preview Panel -->
+      <!-- Panel Pratinjau Faktur -->
       <div class="w-full lg:w-1/2 {activeTab !== 'preview' ? 'hidden sm:block' : ''}">
         <div class="sticky top-20">
           <div class="mb-3 flex items-center justify-between">
-            <h2 class="text-xs font-semibold uppercase tracking-wider text-zinc-500">Live Preview</h2>
+            <h2 class="text-xs font-bold uppercase tracking-wider text-zinc-500">Pratinjau Langsung</h2>
             <button
               onclick={handleGeneratePdf}
-              class="text-xs font-medium text-black underline decoration-1 underline-offset-2 hover:text-zinc-600"
+              class="text-xs font-semibold text-zinc-900 underline decoration-1 underline-offset-2 hover:text-zinc-600 transition"
             >
-              Export as PDF
+              Ekspor sebagai PDF
             </button>
           </div>
           <div class="overflow-auto rounded-sm border border-zinc-200 bg-zinc-100 p-4 shadow-xs">
@@ -273,12 +375,12 @@
     </div>
   </main>
 
-  <!-- Footer -->
-  <footer class="border-t border-zinc-200 bg-white py-3 text-center text-xs text-zinc-400">
-    Invoice Generator with Embedded SQLite Database & WebAssembly
+  <!-- Footer Bersih -->
+  <footer class="border-t border-zinc-200 bg-white py-3 text-center text-xs text-zinc-500">
+    Generator Faktur • Data Anda tersimpan secara lokal dan aman di browser
   </footer>
 
-  <!-- SQLite History & Management Modal -->
+  <!-- Modal Riwayat Faktur -->
   <InvoiceHistoryModal
     isOpen={isHistoryOpen}
     {currentInvoiceId}

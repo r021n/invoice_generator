@@ -80,9 +80,9 @@ export const DEFAULT_COLUMN_IDS = {
 
 export function getDefaultColumns(): InvoiceColumn[] {
   return [
-    { id: DEFAULT_COLUMN_IDS.DESCRIPTION, label: 'Description', type: 'text', isRemovable: false },
-    { id: DEFAULT_COLUMN_IDS.QUANTITY, label: 'Qty', type: 'number', isRemovable: true },
-    { id: DEFAULT_COLUMN_IDS.PRICE, label: 'Price', type: 'currency', isRemovable: true },
+    { id: DEFAULT_COLUMN_IDS.DESCRIPTION, label: 'Deskripsi', type: 'text', isRemovable: false },
+    { id: DEFAULT_COLUMN_IDS.QUANTITY, label: 'Jumlah', type: 'number', isRemovable: true },
+    { id: DEFAULT_COLUMN_IDS.PRICE, label: 'Harga Satuan', type: 'currency', isRemovable: true },
     { id: DEFAULT_COLUMN_IDS.TOTAL, label: 'Total', type: 'total', isRemovable: false },
   ];
 }
